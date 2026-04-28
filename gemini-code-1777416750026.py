@@ -2,10 +2,14 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# 1. CONFIGURACIÓN DE SEGURIDAD Y API
-# SUSTITUYE POR TU NUEVA CLAVE GENERADA
-API_KEY = "TU_NUEVA_API_KEY"
-genai.configure(api_key=API_KEY)
+# 1. CONFIGURACIÓN DE SEGURIDAD (Cargando desde Secrets)
+# Intentamos cargar la clave de los secretos de Streamlit
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=API_KEY)
+except:
+    st.error("No se encontró la API Key en los Secrets de Streamlit.")
+
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 st.set_page_config(page_title="Asistente Ventas", layout="centered", page_icon="📊")
