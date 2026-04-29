@@ -2,17 +2,17 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# 1. CONFIGURACIÓN (Segura con Secrets)
+# 1. CONFIGURACIÓN SEGURA
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 except:
-    st.error("Configura GEMINI_API_KEY en los Secrets de Streamlit.")
+    st.error("Falta la API Key en los Secrets.")
 
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 st.set_page_config(page_title="Asistente Ventas", layout="centered")
 
-# 2. CARGA DE DATOS
+# 2. CARGA DE DATOS (Misma lógica pero con manejo de errores de red)
 @st.cache_data(ttl=600)
 def load_data():
     try:
@@ -20,69 +20,73 @@ def load_data():
         drive_url = f'https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv'
         df = pd.read_csv(drive_url)
         df.columns = df.columns.str.strip()
-        cols_validas = ['Fecha', 'Tienda', 'Producto', 'Categoria', 'Cantidad', 'Precio_Unitario', 'Total']
-        df = df[cols_validas]
         df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
-        df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
         return df
-    except Exception as e:
+    except:
         return None
 
 df = load_data()
 
 st.title("📊 Asistente de Ventas")
 
-# 3. MANEJO DEL HISTORIAL (Sin duplicados ni errores de renderizado)
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# 3. INTERFAZ SIMPLIFICADA (Para evitar el error de Node)
+# En lugar de st.chat_input dentro de bucles complejos, usamos una estructura lineal
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# Dibujar el historial de forma estática
-for i, message in enumerate(st.session_state.messages):
-    with st.chat_message(message["role"]):
-        st.write(message["content"])
+# Contenedor para el historial (se dibuja primero)
+chat_container = st.container()
 
-# 4. ENTRADA DE USUARIO
-if prompt := st.chat_input("¿Qué quieres consultar?"):
-    # Mostrar inmediatamente el mensaje del usuario
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
+with chat_container:
+    for m in st.session_state.chat_history:
+        with st.chat_message(m["role"]):
+            st.write(m["content"])
+
+# Entrada de usuario al final
+prompt = st.chat_input("Pregunta algo sobre las ventas...")
+
+if prompt:
+    # 1. Mostrar mensaje del usuario
+    st.session_state.chat_history.append({"role": "user", "content": prompt})
+    with chat_container.chat_message("user"):
         st.write(prompt)
 
-    # Lógica de respuesta
-    with st.chat_message("assistant"):
-        # Usamos placeholders vacíos para que Streamlit no se confunda al renderizar
-        status_placeholder = st.empty()
-        response_placeholder = st.empty()
+    # 2. Espacio reservado para la respuesta (Esto evita el error de removeChild)
+    with chat_container.chat_message("assistant"):
+        # USAMOS st.empty() PARA CONTROL TOTAL
+        thinking_text = st.empty()
+        data_placeholder = st.empty()
+        desc_placeholder = st.empty()
         
-        status_placeholder.write("⌛ Analizando datos...")
+        thinking_text.info("🔍 Procesando consulta...")
         
         try:
-            # Prompt para la IA
-            sys_prompt = f"Dataframe 'df' columnas: {df.columns.tolist()}. Responde SOLO con código Python. Resultado en variable 'resultado'. Pregunta: {prompt}"
+            # Lógica de la IA
+            sys_prompt = f"Dataframe 'df' con: {df.columns.tolist()}. Responde SOLO código Python. Resultado en 'resultado'. Pregunta: {prompt}"
+            raw_code = model.generate_content(sys_prompt).text
+            clean_code = raw_code.replace('```python', '').replace('```', '').strip()
             
-            raw_res = model.generate_content(sys_prompt).text
-            codigo = raw_res.replace('```python', '').replace('```', '').strip()
-            
+            # Ejecución
             loc = {'df': df, 'pd': pd}
-            exec(codigo, {}, loc)
+            exec(clean_code, {}, loc)
             resultado = loc.get('resultado')
 
-            # Limpiamos el mensaje de "Analizando..." antes de poner el resultado
-            status_placeholder.empty()
+            # LIMPIAMOS el texto de carga antes de mostrar nada
+            thinking_text.empty()
 
-            # Mostramos el resultado
+            # Mostramos los datos
             if isinstance(resultado, (pd.DataFrame, pd.Series)):
-                response_placeholder.dataframe(resultado.head(15))
+                data_placeholder.dataframe(resultado.head(10))
             else:
-                response_placeholder.metric("Resultado", f"{resultado}")
+                data_placeholder.metric("Resultado", f"{resultado}")
 
-            # Explicación final
-            exp = model.generate_content(f"Resume este dato: {resultado}").text
-            st.write(exp)
+            # Explicación
+            desc_res = model.generate_content(f"Explica esto brevemente: {resultado}")
+            desc_placeholder.write(desc_res.text)
             
-            # Guardamos la explicación en el historial
-            st.session_state.messages.append({"role": "assistant", "content": exp})
+            # Guardamos en historial
+            st.session_state.chat_history.append({"role": "assistant", "content": desc_res.text})
 
         except Exception as e:
-            status_placeholder.empty()
-            st.error("No pude procesar la consulta.")
+            thinking_text.empty()
+            st.error("No pude entender esa consulta. Prueba con algo más simple.")
