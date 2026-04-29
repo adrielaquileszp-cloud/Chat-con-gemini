@@ -5,9 +5,12 @@ import google.generativeai as genai
 # 1. CONFIGURACIÓN DE SEGURIDAD
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
+    # Forzamos la configuración para que use la API estable
     genai.configure(api_key=API_KEY)
-    # CAMBIO CLAVE: Usamos 'gemini-pro' que es el modelo con mayor compatibilidad 404
-    model = genai.GenerativeModel('gemini-pro')
+    
+    # TRUCO: Usamos 'gemini-1.5-flash' sin prefijos raros, 
+    # la librería se encargará de buscar la mejor ruta.
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception:
     st.error("⚠️ Configura 'GEMINI_API_KEY' en los Secrets de Streamlit.")
 
@@ -18,25 +21,26 @@ st.set_page_config(page_title="Asistente Ventas", layout="centered", page_icon="
 def load_data():
     try:
         FILE_ID = "16HQlKYZavkZucbJQqLc4pHcwdK-ONH5wv-xWbEC4NTE"
-        # URL de exportación optimizada
-        drive_url = f'https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=0'
+        # Esta URL es la que mejor funciona con archivos públicos
+        url = f'https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv'
         
-        df = pd.read_csv(drive_url)
+        df = pd.read_csv(url)
         
         # Limpieza de nombres de columnas
         df.columns = df.columns.str.strip()
         
-        # Filtramos columnas necesarias
-        cols_validas = ['Fecha', 'Tienda', 'Producto', 'Categoria', 'Cantidad', 'Precio_Unitario', 'Total']
-        df = df[cols_validas]
+        # Seleccionamos las columnas (asegúrate de que existan en tu Excel)
+        cols = ['Fecha', 'Tienda', 'Producto', 'Categoria', 'Cantidad', 'Precio_Unitario', 'Total']
+        df = df[cols]
         
-        # Formateo de tipos
+        # Formateo de tipos para que los cálculos no fallen
         df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
+        df['Cantidad'] = pd.to_numeric(df['Cantidad'], errors='coerce').fillna(0)
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
         
         return df
     except Exception as e:
-        st.error(f"❌ Error al cargar datos: {e}")
+        st.error(f"❌ Error al conectar con los datos: {e}")
         return None
 
 df = load_data()
@@ -47,7 +51,7 @@ st.title("📊 Mi Asistente de Ventas")
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# Contenedor para el historial
+# Dibujamos el historial
 chat_container = st.container()
 for m in st.session_state.chat_history:
     with chat_container.chat_message(m["role"]):
@@ -65,21 +69,21 @@ if prompt := st.chat_input("¿Qué quieres saber?"):
             st_status.info("🔍 Analizando...")
             
             try:
-                # Prompt para la IA
-                sys_prompt = f"Actúa como experto en Pandas. DataFrame 'df' con columnas: {df.columns.tolist()}. Responde SOLO código Python. El resultado final en la variable 'resultado'. Sin texto. Pregunta: {prompt}"
+                # Instrucción para la IA
+                sys_msg = f"Actúa como experto en Pandas. DataFrame 'df' con columnas: {df.columns.tolist()}. Responde SOLO código Python. El resultado en la variable 'resultado'. Sin texto. Pregunta: {prompt}"
                 
                 # Generar código
-                response = model.generate_content(sys_prompt)
+                response = model.generate_content(sys_msg)
                 codigo = response.text.replace('```python', '').replace('```', '').strip()
                 
-                # Ejecutar en entorno controlado
+                # Ejecutar código
                 entorno = {'df': df, 'pd': pd}
                 exec(codigo, entorno)
-                
                 resultado = entorno.get('resultado')
 
                 st_status.empty()
 
+                # Mostrar visualmente
                 if isinstance(resultado, (pd.DataFrame, pd.Series)):
                     st.dataframe(resultado.head(10))
                 else:
@@ -95,4 +99,3 @@ if prompt := st.chat_input("¿Qué quieres saber?"):
                 st.error("Hubo un detalle al procesar la pregunta.")
                 with st.expander("Detalle técnico"):
                     st.write(e)
-                    st.code(codigo if 'codigo' in locals() else "No se generó código")
