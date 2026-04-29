@@ -2,18 +2,18 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# 1. CONFIGURACIÓN (Con el modelo que el diagnóstico confirmó)
+# 1. CONFIGURACIÓN (Actualizada a Gemini 3.0)
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
-    # Usamos Gemini 2.0 Flash que ya vimos que tienes disponible
-    model = genai.GenerativeModel('models/gemini-2.0-flash')
+    # Usamos el modelo que tu diagnóstico confirmó como disponible
+    model = genai.GenerativeModel('models/gemini-3-flash-preview')
 except Exception:
     st.error("⚠️ Configura 'GEMINI_API_KEY' en los Secrets.")
 
-st.set_page_config(page_title="Asistente Ventas Pro", layout="centered")
+st.set_page_config(page_title="Asistente Ventas 3.0", layout="centered")
 
-# 2. CARGA DE DATOS (Limpiando columnas basura detectadas)
+# 2. CARGA DE DATOS (URL Directa)
 @st.cache_data(ttl=300)
 def load_data():
     try:
@@ -21,7 +21,7 @@ def load_data():
         url = f'https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv'
         df = pd.read_csv(url)
         
-        # Limpiamos columnas: solo nos quedamos con las que tienen datos reales
+        # Limpieza de columnas (ignorando las basura del final)
         df.columns = df.columns.str.strip()
         cols_reales = ['Fecha', 'Tienda', 'Producto', 'Categoria', 'Cantidad', 'Precio_Unitario', 'Total']
         df = df[cols_reales]
@@ -36,7 +36,7 @@ def load_data():
 
 df = load_data()
 
-st.title("📊 Asistente de Ventas 2.0")
+st.title("🚀 Asistente de Ventas 3.0")
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -48,7 +48,7 @@ for m in st.session_state.chat_history:
         st.write(m["content"])
 
 # 4. CHAT
-if prompt := st.chat_input("¿Qué quieres analizar hoy?"):
+if prompt := st.chat_input("Pregunta lo que quieras sobre las ventas..."):
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     with chat_container.chat_message("user"):
         st.write(prompt)
@@ -56,7 +56,7 @@ if prompt := st.chat_input("¿Qué quieres analizar hoy?"):
     if df is not None:
         with chat_container.chat_message("assistant"):
             st_status = st.empty()
-            st_status.info("⚡ Procesando con Gemini 2.0...")
+            st_status.info("✨ Pensando con Gemini 3.0 Flash...")
             
             try:
                 # Instrucción para la IA
@@ -79,12 +79,12 @@ if prompt := st.chat_input("¿Qué quieres analizar hoy?"):
                     st.metric("Resultado", f"{resultado}")
 
                 # Explicación
-                explicacion = model.generate_content(f"Resume este dato brevemente: {resultado}").text
+                explicacion = model.generate_content(f"Resume brevemente este dato: {resultado}").text
                 st.write(explicacion)
                 st.session_state.chat_history.append({"role": "assistant", "content": explicacion})
 
             except Exception as e:
                 st_status.empty()
-                st.error("Hubo un detalle al procesar la pregunta.")
+                st.error("Detalle al procesar.")
                 with st.expander("Ver detalle técnico"):
                     st.write(e)
