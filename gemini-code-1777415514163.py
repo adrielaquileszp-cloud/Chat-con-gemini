@@ -2,91 +2,119 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# 1. CONFIGURACIÓN SEGURA
+# 1. CONFIGURACIÓN SEGURA (Usa los Secrets de Streamlit)
 try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-except:
-    st.error("Falta la API Key en los Secrets.")
+    # Busca la clave que guardaste en los Settings de Streamlit Cloud
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=API_KEY)
+except Exception:
+    st.error("⚠️ No se encontró la API Key en los Secrets de Streamlit.")
 
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-st.set_page_config(page_title="Asistente Ventas", layout="centered")
+st.set_page_config(page_title="Asistente Ventas", layout="centered", page_icon="📊")
 
-# 2. CARGA DE DATOS (Misma lógica pero con manejo de errores de red)
+# 2. CARGA DE DATOS (Conexión Directa a Google Sheets)
 @st.cache_data(ttl=600)
 def load_data():
     try:
+        # Tu ID de Google Sheets
         FILE_ID = "16HQlKYZavkZucbJQqLc4pHcwdK-ONH5wv-xWbEC4NTE"
+        # URL formateada para exportar como CSV para que Pandas lo lea
         drive_url = f'https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv'
+        
         df = pd.read_csv(drive_url)
+        
+        # Limpieza de nombres de columnas
         df.columns = df.columns.str.strip()
+        
+        # Seleccionamos las columnas necesarias
+        cols_validas = ['Fecha', 'Tienda', 'Producto', 'Categoria', 'Cantidad', 'Precio_Unitario', 'Total']
+        df = df[cols_validas]
+        
+        # Limpieza de formatos de datos
         df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
+        df['Cantidad'] = pd.to_numeric(df['Cantidad'], errors='coerce').fillna(0)
+        df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        
         return df
-    except:
+    except Exception as e:
+        st.error(f"❌ Error al conectar con los datos: {e}")
         return None
 
 df = load_data()
 
-st.title("📊 Asistente de Ventas")
+# 3. INTERFAZ DE USUARIO
+st.title("📊 Mi Asistente de Ventas")
+st.markdown("Consulta tus datos en tiempo real.")
 
-# 3. INTERFAZ SIMPLIFICADA (Para evitar el error de Node)
-# En lugar de st.chat_input dentro de bucles complejos, usamos una estructura lineal
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# Contenedor para el historial (se dibuja primero)
+# Dibujamos el historial
 chat_container = st.container()
+for m in st.session_state.chat_history:
+    with chat_container.chat_message(m["role"]):
+        st.write(m["content"])
 
-with chat_container:
-    for m in st.session_state.chat_history:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
-
-# Entrada de usuario al final
-prompt = st.chat_input("Pregunta algo sobre las ventas...")
-
-if prompt:
-    # 1. Mostrar mensaje del usuario
+# 4. ENTRADA DE CONSULTAS
+if prompt := st.chat_input("¿Qué quieres saber de tus ventas?"):
+    # Guardar mensaje del usuario
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     with chat_container.chat_message("user"):
         st.write(prompt)
 
-    # 2. Espacio reservado para la respuesta (Esto evita el error de removeChild)
+    # Procesamiento
     with chat_container.chat_message("assistant"):
-        # USAMOS st.empty() PARA CONTROL TOTAL
-        thinking_text = st.empty()
+        # Contenedores para evitar errores visuales (removeChild)
+        status_placeholder = st.empty()
         data_placeholder = st.empty()
-        desc_placeholder = st.empty()
         
-        thinking_text.info("🔍 Procesando consulta...")
+        status_placeholder.info("🔍 Analizando base de datos...")
         
         try:
-            # Lógica de la IA
-            sys_prompt = f"Dataframe 'df' con: {df.columns.tolist()}. Responde SOLO código Python. Resultado en 'resultado'. Pregunta: {prompt}"
-            raw_code = model.generate_content(sys_prompt).text
-            clean_code = raw_code.replace('```python', '').replace('```', '').strip()
+            # Prompt para Gemini
+            sys_prompt = f"""
+            Actúa como experto en Pandas. Tienes un DataFrame 'df' con columnas: {df.columns.tolist()}.
+            Reglas:
+            1. Responde SOLO código Python.
+            2. El resultado debe guardarse en la variable 'resultado'.
+            3. Si es un ranking o lista, usa .head(10).
+            Pregunta: {prompt}
+            """
             
-            # Ejecución
-            loc = {'df': df, 'pd': pd}
-            exec(clean_code, {}, loc)
-            resultado = loc.get('resultado')
+            raw_res = model.generate_content(sys_prompt).text
+            # Limpiamos el código por si trae markdown
+            codigo = raw_res.replace('```python', '').replace('```', '').strip()
+            
+            # --- EJECUCIÓN SEGURA (Solución al NameError: 'df') ---
+            entorno = {'df': df, 'pd': pd}
+            exec(codigo, entorno)
+            resultado = entorno.get('resultado')
 
-            # LIMPIAMOS el texto de carga antes de mostrar nada
-            thinking_text.empty()
+            # Si no encontró 'resultado', buscamos cualquier variable nueva
+            if resultado is None:
+                vars_nuevas = {k: v for k, v in entorno.items() if k not in ['df', 'pd', '__builtins__']}
+                if vars_nuevas:
+                    resultado = list(vars_nuevas.values())[-1]
 
-            # Mostramos los datos
+            status_placeholder.empty() # Quitamos el "Analizando..."
+
+            # Mostramos los datos encontrados
             if isinstance(resultado, (pd.DataFrame, pd.Series)):
-                data_placeholder.dataframe(resultado.head(10))
+                data_placeholder.dataframe(resultado)
             else:
-                data_placeholder.metric("Resultado", f"{resultado}")
+                data_placeholder.metric("Valor", f"{resultado}")
 
-            # Explicación
-            desc_res = model.generate_content(f"Explica esto brevemente: {resultado}")
-            desc_placeholder.write(desc_res.text)
+            # Explicación breve de la IA
+            explicacion = model.generate_content(f"Explica brevemente este dato de ventas: {resultado}").text
+            st.write(explicacion)
             
-            # Guardamos en historial
-            st.session_state.chat_history.append({"role": "assistant", "content": desc_res.text})
+            # Guardamos en el historial
+            st.session_state.chat_history.append({"role": "assistant", "content": explicacion})
 
         except Exception as e:
-            thinking_text.empty()
-            st.error("No pude entender esa consulta. Prueba con algo más simple.")
+            status_placeholder.empty()
+            st.error("No pude completar el cálculo. Intenta ser más específico.")
+            with st.expander("Ver detalle del error"):
+                st.write(e)
