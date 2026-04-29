@@ -9,7 +9,7 @@ try:
 except Exception:
     st.error("⚠️ Error: Configura 'GEMINI_API_KEY' en los Secrets de Streamlit.")
 
-model = genai.GenerativeModel('models/gemini-1.5-flash')
+model = genai.GenerativeModel(model_name='gemini-1.5-flash')
 
 st.set_page_config(page_title="Asistente Ventas", layout="centered", page_icon="📊")
 
